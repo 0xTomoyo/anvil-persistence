@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"os"
@@ -18,7 +20,7 @@ import (
 )
 
 // The command to start Anvil
-const anvilCommand string = "/root/.foundry/bin/anvil"
+const anvilCommand string = "anvil"
 
 // The Anvil ipc path
 const ipcPath string = "/tmp/anvil.ipc"
@@ -29,13 +31,19 @@ const startupMessage string = "Listening on"
 // File containing the Anvil state
 const anvilState string = "anvil_state.txt"
 
+// A snapshot of the Anvil state
+type AnvilSnapshot struct {
+	BlockNumber uint64
+	State       string
+}
+
 func main() {
 	// Setup context
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// Anvil executable
-	anvil := exec.Command(anvilCommand, "--host", "0.0.0.0", "--ipc")
+	anvil := exec.Command(anvilCommand, "--ipc")
 
 	// Output pipe of the Anvil process
 	stdout, err := anvil.StdoutPipe()
@@ -118,9 +126,17 @@ func main() {
 				panic(err)
 			}
 
+			// Encode the Anvil state
+			var encodeBuffer bytes.Buffer
+			if err := gob.NewEncoder(&encodeBuffer).Encode(&AnvilSnapshot{
+				BlockNumber: blockNumber,
+				State:       result,
+			}); err != nil {
+				panic(err)
+			}
+
 			// Write the Anvil state
-			err = os.WriteFile(anvilState, []byte(result), 0644)
-			if err != nil {
+			if err := os.WriteFile(anvilState, encodeBuffer.Bytes(), 0644); err != nil {
 				panic(err)
 			}
 
@@ -145,15 +161,28 @@ func main() {
 		snapshotCh <- blockNumber
 		<-savedSnapshotCh
 	} else {
+		// Decode the saved state
+		snapshot := &AnvilSnapshot{}
+		decodeBuffer := bytes.NewBuffer(data)
+		if err := gob.NewDecoder(decodeBuffer).Decode(snapshot); err != nil {
+			panic(err)
+		}
+
+		// Mine blocks to ensure that our block number matches the state
+		err = c.Call(nil, "anvil_mine", snapshot.BlockNumber, 0)
+		if err != nil {
+			panic(err)
+		}
+
 		// Load the Anvil state
 		var result bool
-		err = c.Call(&result, "anvil_loadState", string(data))
+		err = c.Call(&result, "anvil_loadState", string(snapshot.State))
 		if err != nil {
 			panic(err)
 		}
 
 		if result {
-			fmt.Println("Loaded the Anvil state")
+			fmt.Printf("Loaded the Anvil state at block number %d\n", snapshot.BlockNumber)
 		} else {
 			panic(errors.New("failed to load the Anvil state"))
 		}
@@ -170,22 +199,20 @@ func main() {
 	fmt.Println("Subscribed to new blocks")
 
 	var (
-		snapshot          bool
-		pendingSnapshot   uint64
-		latestBlockNumber uint64
+		snapshot        bool
+		pendingSnapshot uint64
 	)
 
 	// Routine for taking snapshots as new blocks arrive
 	for {
 		select {
 		case header := <-newHeadCh:
-			latestBlockNumber = header.Number.Uint64()
 			if snapshot {
 				// If we are currently taking a snapshot, take a new one once it current one is done
-				pendingSnapshot = latestBlockNumber
+				pendingSnapshot = header.Number.Uint64()
 			} else {
 				// Take a new snapshot
-				snapshotCh <- latestBlockNumber
+				snapshotCh <- header.Number.Uint64()
 				snapshot = true
 				pendingSnapshot = 0
 			}
@@ -206,8 +233,14 @@ func main() {
 				<-savedSnapshotCh
 			}
 
+			// Get the latest block number
+			blockNumber, err := client.BlockNumber(context.Background())
+			if err != nil {
+				panic(err)
+			}
+
 			// Take a new snapshot
-			snapshotCh <- latestBlockNumber
+			snapshotCh <- blockNumber
 			<-savedSnapshotCh
 
 			return
