@@ -18,7 +18,7 @@ import (
 )
 
 // The command to start Anvil
-const anvilCommand string = "anvil"
+const anvilCommand string = "/root/.foundry/bin/anvil"
 
 // The Anvil ipc path
 const ipcPath string = "/tmp/anvil.ipc"
@@ -35,7 +35,7 @@ func main() {
 	defer stop()
 
 	// Anvil executable
-	anvil := exec.Command(anvilCommand, "--ipc")
+	anvil := exec.Command(anvilCommand, "--host", "0.0.0.0", "--ipc")
 
 	// Output pipe of the Anvil process
 	stdout, err := anvil.StdoutPipe()
