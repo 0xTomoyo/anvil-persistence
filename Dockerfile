@@ -14,6 +14,8 @@ RUN /root/.foundry/bin/foundryup
 
 WORKDIR /app
 
+RUN mkdir -p /app/data
+
 COPY go.mod ./
 COPY go.sum ./
 RUN go mod download
@@ -24,4 +26,4 @@ RUN go build -o /anvil-persistence
 
 EXPOSE 8545
 
-CMD [ "/anvil-persistence" ]
+CMD [ "/anvil-persistence", "-command=/root/.foundry/bin/anvil", "-file=data/anvil_state.txt", "-host=0.0.0.0" ]

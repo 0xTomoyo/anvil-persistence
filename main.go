@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/gob"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,16 +21,16 @@ import (
 )
 
 // The command to start Anvil
-const anvilCommand string = "anvil"
+const anvilCommandDefault string = "anvil"
+
+// File containing the Anvil state
+const anvilStateDefault string = "anvil_state.txt"
 
 // The Anvil ipc path
 const ipcPath string = "/tmp/anvil.ipc"
 
 // The message at which Anvil starts up
 const startupMessage string = "Listening on"
-
-// File containing the Anvil state
-const anvilState string = "anvil_state.txt"
 
 // A snapshot of the Anvil state
 type AnvilSnapshot struct {
@@ -42,8 +43,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Parse the flags
+	var (
+		anvilCommand string
+		anvilState   string
+		host         string
+	)
+
+	flag.StringVar(&anvilCommand, "command", anvilCommandDefault, "The command to start Anvil")
+	flag.StringVar(&anvilState, "file", anvilStateDefault, "File containing the Anvil state")
+	flag.StringVar(&host, "host", "127.0.0.1", "Host IP address")
+
+	flag.Parse()
+
 	// Anvil executable
-	anvil := exec.Command(anvilCommand, "--ipc")
+	anvil := exec.Command(anvilCommand, "--host", host, "--ipc")
 
 	// Output pipe of the Anvil process
 	stdout, err := anvil.StdoutPipe()
@@ -169,9 +183,11 @@ func main() {
 		}
 
 		// Mine blocks to ensure that our block number matches the state
-		err = c.Call(nil, "anvil_mine", snapshot.BlockNumber, 0)
-		if err != nil {
-			panic(err)
+		if snapshot.BlockNumber != 0 {
+			err = c.Call(nil, "anvil_mine", snapshot.BlockNumber, 0)
+			if err != nil {
+				panic(err)
+			}
 		}
 
 		// Load the Anvil state
