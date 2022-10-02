@@ -12,6 +12,8 @@ Requirements: [Go](https://go.dev/doc/install) and [Foundry](https://github.com/
 go install
 ```
 
+Alternatively you can use the [Docker image](https://hub.docker.com/r/0xtomoyo/anvil-persistence).
+
 ## Usage
 
 ```
