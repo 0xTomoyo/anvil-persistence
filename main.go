@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,6 +25,9 @@ const ipcPath string = "/tmp/anvil.ipc"
 
 // The message at which Anvil starts up
 const startupMessage string = "Listening on"
+
+// File containing the Anvil state
+const anvilState string = "anvil_state.txt"
 
 func main() {
 	// Setup context
@@ -107,26 +111,53 @@ func main() {
 		for {
 			blockNumber := <-snapshotCh
 
+			// Dump the Anvil state
 			var result string
-			err = c.CallContext(ctx, &result, "anvil_dumpState")
+			err = c.Call(&result, "anvil_dumpState")
+			if err != nil {
+				panic(err)
+			}
+
+			// Write the Anvil state
+			err = os.WriteFile(anvilState, []byte(result), 0644)
 			if err != nil {
 				panic(err)
 			}
 
 			fmt.Printf("Captured snapshot at block %d\n", blockNumber)
-			fmt.Println(result)
 
+			// Notify that we have captured a snapshot
 			savedSnapshotCh <- struct{}{}
 		}
 	}()
 
-	// Capture a snapshot on startup
-	blockNumber, err := client.BlockNumber(ctx)
-	if err != nil {
-		panic(err)
+	// Load the saved Anvil state
+	data, err := os.ReadFile(anvilState)
+
+	if len(data) == 0 || err != nil {
+		fmt.Println("No Anvil state found")
+
+		// Capture a snapshot on startup if we don't have any saved state
+		blockNumber, err := client.BlockNumber(ctx)
+		if err != nil {
+			panic(err)
+		}
+		snapshotCh <- blockNumber
+		<-savedSnapshotCh
+	} else {
+		// Load the Anvil state
+		var result bool
+		err = c.Call(&result, "anvil_loadState", string(data))
+		if err != nil {
+			panic(err)
+		}
+
+		if result {
+			fmt.Println("Loaded the Anvil state")
+		} else {
+			panic(errors.New("failed to load the Anvil state"))
+		}
 	}
-	snapshotCh <- blockNumber
-	<-savedSnapshotCh
 
 	// Subscribe to new blocks
 	newHeadCh := make(chan *types.Header)
@@ -139,30 +170,46 @@ func main() {
 	fmt.Println("Subscribed to new blocks")
 
 	var (
-		snapshot        bool
-		pendingSnapshot uint64
+		snapshot          bool
+		pendingSnapshot   uint64
+		latestBlockNumber uint64
 	)
 
+	// Routine for taking snapshots as new blocks arrive
 	for {
 		select {
-		case <-savedSnapshotCh:
-			if pendingSnapshot != 0 {
-				snapshotCh <- pendingSnapshot
-				pendingSnapshot = 0
-			} else {
-				snapshot = false
-			}
 		case header := <-newHeadCh:
+			latestBlockNumber = header.Number.Uint64()
 			if snapshot {
-				pendingSnapshot = header.Number.Uint64()
+				// If we are currently taking a snapshot, take a new one once it current one is done
+				pendingSnapshot = latestBlockNumber
 			} else {
-				snapshotCh <- header.Number.Uint64()
+				// Take a new snapshot
+				snapshotCh <- latestBlockNumber
 				snapshot = true
+				pendingSnapshot = 0
+			}
+		case <-savedSnapshotCh:
+			if pendingSnapshot == 0 {
+				// The last snapshot has completed and there are no pending snapshots to take
+				snapshot = false
+			} else {
+				// If we received new blocks after starting the last snapshot, take a new snapshot
+				snapshotCh <- pendingSnapshot
 				pendingSnapshot = 0
 			}
 		case err := <-subscription.Err():
 			fmt.Printf("Subscription err: %v\n", err)
 		case <-ctx.Done():
+			// If we are currently taking a snapshot, drain the snapshot saved channel
+			if snapshot {
+				<-savedSnapshotCh
+			}
+
+			// Take a new snapshot
+			snapshotCh <- latestBlockNumber
+			<-savedSnapshotCh
+
 			return
 		}
 	}
