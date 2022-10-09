@@ -250,7 +250,9 @@ func main() {
 			}
 
 			// Get the latest block number
-			blockNumber, err := client.BlockNumber(context.Background())
+			cCtx, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			blockNumber, err := client.BlockNumber(cCtx)
 			if err != nil {
 				panic(err)
 			}
