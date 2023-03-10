@@ -48,16 +48,18 @@ func main() {
 		anvilCommand string
 		anvilState   string
 		host         string
+		chainId      string
 	)
 
 	flag.StringVar(&anvilCommand, "command", anvilCommandDefault, "The command to start Anvil")
 	flag.StringVar(&anvilState, "file", anvilStateDefault, "File containing the Anvil state")
 	flag.StringVar(&host, "host", "127.0.0.1", "Host IP address")
+	flag.StringVar(&chainId, "chain-id", "31337", "Chain ID")
 
 	flag.Parse()
 
 	// Anvil executable
-	anvil := exec.Command(anvilCommand, "--host", host, "--ipc")
+	anvil := exec.Command(anvilCommand, "--host", host, "--chain-id", chainId, "--ipc")
 
 	// Output pipe of the Anvil process
 	stdout, err := anvil.StdoutPipe()
